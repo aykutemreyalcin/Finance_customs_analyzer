@@ -7,6 +7,9 @@ filesystem database, and exposes the same calculation engine as the old UI.
 
 import os
 import secrets
+import gzip
+import sqlite3
+import tempfile
 from io import BytesIO
 from typing import Any
 
@@ -16,6 +19,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from core.analytics import (
     compute_benchmarks,
@@ -41,6 +45,10 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 security = HTTPBearer(auto_error=False)
+MIGRATION_TABLES = (
+    "invoices", "shipment_charges", "boxes", "legacy_fedex_invoice_raw",
+    "customer_invoices", "products", "invoice_review", "disputed_items", "refunds",
+)
 
 
 def require_password(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
@@ -101,6 +109,70 @@ def load_financial_frames():
         charges = pd.DataFrame(columns=["id", "invoice_number", "charge_type", "tracking_id", "amount"])
     enriched = enrich_boxes_for_display(boxes)
     return boxes, charges, compute_profit_calculation(enriched)
+
+
+def restore_sqlite_backup(compressed_backup: bytes) -> dict[str, int]:
+    """Copies a gzip-compressed SQLite backup to an *empty* Postgres database.
+
+    This exists for the one-time production migration. It rejects a non-empty
+    target rather than risking duplicate financial records on a repeated upload.
+    The temporary SQLite file is created under /tmp and removed before return.
+    """
+    if len(compressed_backup) > 4 * 1024 * 1024:
+        raise ValueError("Compressed backup is larger than the 4 MB upload limit.")
+    try:
+        sqlite_bytes = gzip.decompress(compressed_backup)
+    except OSError as error:
+        raise ValueError("Upload a gzip-compressed .db.gz backup.") from error
+    if len(sqlite_bytes) > 64 * 1024 * 1024:
+        raise ValueError("Decompressed backup is larger than the 64 MB safety limit.")
+
+    temporary_file = tempfile.NamedTemporaryFile(suffix=".db", dir="/tmp", delete=False)
+    try:
+        temporary_file.write(sqlite_bytes)
+        temporary_file.close()
+        source = sqlite3.connect(f"file:{temporary_file.name}?mode=ro", uri=True)
+        source.row_factory = sqlite3.Row
+        target = get_connection()
+        try:
+            init_db(target)
+            existing = {
+                table: target.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in MIGRATION_TABLES
+            }
+            if any(existing.values()):
+                raise ValueError("Target Postgres database is not empty; migration was not run.")
+
+            copied = {}
+            for table in MIGRATION_TABLES:
+                rows = source.execute(f"SELECT * FROM {table}").fetchall()
+                if not rows:
+                    copied[table] = 0
+                    continue
+                columns = list(rows[0].keys())
+                placeholders = ", ".join("?" for _ in columns)
+                target.executemany(
+                    f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})",
+                    [tuple(row[column] for column in columns) for row in rows],
+                )
+                copied[table] = len(rows)
+            if getattr(target, "is_postgres", False):
+                for table in ("shipment_charges", "boxes", "legacy_fedex_invoice_raw", "customer_invoices", "products", "disputed_items", "refunds"):
+                    target.execute(
+                        f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE(MAX(id), 1), true) FROM {table}"
+                    )
+            target.commit()
+            return copied
+        except Exception:
+            target.rollback()
+            raise
+        finally:
+            source.close()
+            target.close()
+    finally:
+        temporary_file.close()
+        if os.path.exists(temporary_file.name):
+            os.unlink(temporary_file.name)
 
 
 class BoxCreate(BaseModel):
@@ -301,3 +373,15 @@ async def import_fedex_pdf(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Upload a PDF invoice.")
     return {"invoices": ingest_pdf_bundle(BytesIO(await file.read()), file.filename)}
+
+
+@app.post("/api/admin/migrate-sqlite", dependencies=[Depends(require_password)])
+async def migrate_sqlite(file: UploadFile = File(...)):
+    """One-time authenticated migration of the local NeXa SQLite backup."""
+    if not file.filename or not file.filename.lower().endswith(".db.gz"):
+        raise HTTPException(400, "Upload a gzip-compressed SQLite backup ending in .db.gz.")
+    try:
+        copied = await run_in_threadpool(restore_sqlite_backup, await file.read())
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    return {"migrated": copied}

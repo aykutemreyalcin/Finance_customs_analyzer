@@ -28,8 +28,8 @@ PostgreSQL provider. The application refuses to serve financial data if
 4. Deploy. Open `/api/health` to confirm database connectivity, then open `/` and
    enter the password into the unlock screen. The password is stored only in browser
    session storage.
-5. If historical SQLite data needs to move, take a backup, inspect source counts,
-   then run `DATABASE_URL=... python scripts/data_migration/sqlite_to_postgres.py data/finance_customs.db` from a trusted local environment. This is intentionally not a Vercel build step.
+5. If historical SQLite data needs to move and you have the connection string, take a backup, inspect source counts,
+   then run `DATABASE_URL=... python scripts/data_migration/sqlite_to_postgres.py data/finance_customs.db` from a trusted local environment. Alternatively, gzip the database and upload its `.db.gz` file through the password-protected **Restore existing NeXa data** panel. The panel refuses to run when the target database already contains records.
 
 For a financial production deployment, also enable Vercel Deployment Protection
 and restrict the Vercel project to authorised team members.

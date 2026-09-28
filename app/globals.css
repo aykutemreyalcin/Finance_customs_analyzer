@@ -17,4 +17,5 @@ button { background: #1f4e79; border: 0; border-radius: 6px; color: white; curso
 .badge { background: #fff2cf; border-radius: 99px; color: #775a00; font-size: 11px; font-weight: 700; padding: 4px 8px; } .badge.good { background: #dff4e6; color: #176337; }
 .gate { align-items: center; display: flex; justify-content: center; min-height: 100vh; padding: 24px; } .gate-card { max-width: 430px; padding: 32px; width: 100%; } .gate-card h1 { margin: 4px 0 14px; } .gate-card p { color: #526177; line-height: 1.5; } form { display: grid; gap: 16px; margin-top: 24px; } label { display: grid; font-size: 13px; font-weight: 700; gap: 7px; }
 .error { color: #a21c1c; margin: 14px 0; }.loading { color: #53677f; margin: -15px 0 15px; }
+.success { color: #176337; margin: 14px 0; }.restore p { color: #526177; margin-top: 8px; }.restore form { align-items: center; display: flex; grid-template-columns: 1fr auto; margin-top: 16px; }.restore input { background: #fff; }
 @media (max-width: 800px) { .shell { padding: 20px; }.metrics { grid-template-columns: repeat(2, 1fr); }.section-heading { align-items: stretch; flex-direction: column; }.section-heading input { min-width: 0; } }
