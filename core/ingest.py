@@ -133,9 +133,13 @@ def _ingest_invoice_text(connection, text, source_name):
             invoice_amount = total
 
     connection.execute(
-        "INSERT OR REPLACE INTO invoices "
+        "INSERT INTO invoices "
         "(invoice_number, invoice_date, account_number, charge_type, source_file, company, due_date, invoice_amount) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(invoice_number) DO UPDATE SET "
+        "invoice_date = excluded.invoice_date, account_number = excluded.account_number, "
+        "charge_type = excluded.charge_type, source_file = excluded.source_file, "
+        "company = excluded.company, due_date = excluded.due_date, invoice_amount = excluded.invoice_amount",
         (
             invoice_number,
             header["invoice_date"],

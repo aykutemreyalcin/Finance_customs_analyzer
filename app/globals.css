@@ -1,0 +1,20 @@
+:root { color: #172033; background: #f4f7fb; font-family: Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+.shell { max-width: 1440px; margin: auto; padding: 32px; }
+header, .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+header { margin-bottom: 28px; }
+h1, h2, p { margin: 0; } h1 { font-size: 34px; color: #1f4e79; } h2 { font-size: 22px; }
+.eyebrow { color: #637087; font-size: 11px; font-weight: 700; letter-spacing: .1em; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+.metric, .panel, .gate-card { background: white; border: 1px solid #dce3ed; border-radius: 10px; box-shadow: 0 2px 8px #1d2c4510; }
+.metric { padding: 18px; } .metric span { color: #637087; display: block; font-size: 13px; margin-bottom: 8px; } .metric strong { font-size: 22px; }
+.panel { padding: 22px; margin-bottom: 22px; } .section-heading { margin-bottom: 18px; } .section-heading input { min-width: 280px; }
+input { border: 1px solid #b9c6d6; border-radius: 6px; padding: 10px 12px; width: 100%; }
+button { background: #1f4e79; border: 0; border-radius: 6px; color: white; cursor: pointer; font-weight: 700; padding: 10px 14px; } .quiet { background: #e7eef5; color: #1f4e79; }
+.table-wrap { overflow-x: auto; } table { border-collapse: collapse; font-size: 13px; min-width: 900px; width: 100%; } th { background: #f0f4f8; color: #35445a; text-align: left; } th, td { border-bottom: 1px solid #e4e9f0; padding: 11px 12px; white-space: nowrap; } td { color: #27364a; }
+.badge { background: #fff2cf; border-radius: 99px; color: #775a00; font-size: 11px; font-weight: 700; padding: 4px 8px; } .badge.good { background: #dff4e6; color: #176337; }
+.gate { align-items: center; display: flex; justify-content: center; min-height: 100vh; padding: 24px; } .gate-card { max-width: 430px; padding: 32px; width: 100%; } .gate-card h1 { margin: 4px 0 14px; } .gate-card p { color: #526177; line-height: 1.5; } form { display: grid; gap: 16px; margin-top: 24px; } label { display: grid; font-size: 13px; font-weight: 700; gap: 7px; }
+.error { color: #a21c1c; margin: 14px 0; }.loading { color: #53677f; margin: -15px 0 15px; }
+@media (max-width: 800px) { .shell { padding: 20px; }.metrics { grid-template-columns: repeat(2, 1fr); }.section-heading { align-items: stretch; flex-direction: column; }.section-heading input { min-width: 0; } }
