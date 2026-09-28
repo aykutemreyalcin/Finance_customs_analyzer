@@ -10,14 +10,18 @@ import secrets
 import gzip
 import sqlite3
 import tempfile
+import base64
+import hashlib
+import hmac
+import json
+import time
 from io import BytesIO
 from typing import Any
 
 import numpy as np
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -49,21 +53,51 @@ app.add_middleware(
     allow_origins=[origin for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin],
     allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Content-Type"],
 )
-security = HTTPBearer(auto_error=False)
+SESSION_COOKIE = "__Host-nexa_session"
+SESSION_MAX_AGE_SECONDS = 8 * 60 * 60
 MIGRATION_TABLES = (
     "invoices", "shipment_charges", "boxes", "legacy_fedex_invoice_raw",
     "customer_invoices", "products", "invoice_review", "disputed_items", "refunds",
 )
 
 
-def require_password(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
+def _session_key(expected_password: str) -> bytes:
+    """Use a separate secret when available; deriving a key keeps existing deployments safe."""
+    return (os.getenv("NEXA_SESSION_SECRET") or expected_password).encode("utf-8")
+
+
+def _encode_session(expected_password: str) -> str:
+    payload = json.dumps(
+        {"exp": int(time.time()) + SESSION_MAX_AGE_SECONDS, "nonce": secrets.token_urlsafe(16)},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    body = base64.urlsafe_b64encode(payload).rstrip(b"=")
+    signature = hmac.new(_session_key(expected_password), body, hashlib.sha256).digest()
+    return f"{body.decode('ascii')}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+
+
+def _valid_session(token: str | None, expected_password: str) -> bool:
+    if not token or "." not in token:
+        return False
+    body_text, signature_text = token.split(".", 1)
+    body = body_text.encode("ascii")
+    expected_signature = hmac.new(_session_key(expected_password), body, hashlib.sha256).digest()
+    try:
+        provided_signature = base64.urlsafe_b64decode(signature_text + "=" * (-len(signature_text) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(body_text + "=" * (-len(body_text) % 4)))
+    except (UnicodeEncodeError, ValueError, json.JSONDecodeError):
+        return False
+    return hmac.compare_digest(provided_signature, expected_signature) and int(payload.get("exp", 0)) >= int(time.time())
+
+
+def require_password(request: Request):
     expected = os.getenv("NEXA_PASSWORD")
     if not expected:
         raise HTTPException(503, "NEXA_PASSWORD is not configured.")
-    if not credentials or credentials.scheme.lower() != "bearer" or not secrets.compare_digest(credentials.credentials, expected):
-        raise HTTPException(401, "A valid NeXa password is required.")
+    if not _valid_session(request.cookies.get(SESSION_COOKIE), expected):
+        raise HTTPException(401, "A valid NeXa session is required.")
 
 
 def read_frame(query: str, params: tuple = ()) -> pd.DataFrame:
@@ -201,6 +235,10 @@ class BoxCreate(BaseModel):
     tracking_id: str = Field(min_length=1, max_length=100)
 
 
+class LoginRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=1024)
+
+
 class BoxPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     ship_date: str | None = None
@@ -242,6 +280,32 @@ class RefundCreate(BaseModel):
     approved_by: str | None = None
     status: str = "Pending"
     notes: str | None = None
+
+
+@app.post("/api/auth/login")
+def login(credentials: LoginRequest, response: Response):
+    """Exchange the password once for a signed, HttpOnly same-site session."""
+    expected = os.getenv("NEXA_PASSWORD")
+    if not expected:
+        raise HTTPException(503, "NEXA_PASSWORD is not configured.")
+    if not secrets.compare_digest(credentials.password, expected):
+        raise HTTPException(401, "Password is incorrect.")
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=_encode_session(expected),
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return {"authenticated": True, "expires_in": SESSION_MAX_AGE_SECONDS}
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(key=SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+    return {"authenticated": False}
 
 
 @app.get("/api/health")

@@ -15,31 +15,36 @@ def test_api_requires_password_and_serves_box_workflow(monkeypatch, tmp_path):
     # Import after the environment and DB path are isolated for this test.
     from api.index import app
 
-    client = TestClient(app)
+    client = TestClient(app, base_url="https://testserver")
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/dashboard").status_code == 401
+    assert client.get("/api/dashboard", headers={"Authorization": "Bearer test-password"}).status_code == 401
 
-    headers = {"Authorization": "Bearer test-password"}
-    assert client.get("/api/dashboard", headers=headers).status_code == 200
+    login = client.post("/api/auth/login", json={"password": "test-password"})
+    assert login.status_code == 200
+    assert "httponly" in login.headers["set-cookie"].lower()
+    assert "secure" in login.headers["set-cookie"].lower()
+    assert "samesite=strict" in login.headers["set-cookie"].lower()
+    assert client.get("/api/dashboard").status_code == 200
 
     created = client.post(
         "/api/boxes",
-        headers=headers,
         json={"tracking_id": "TEST-001", "country": "CA", "shipment_type": "Single"},
     )
     assert created.status_code == 200
 
-    result = client.get("/api/boxes?query=TEST-001", headers=headers)
+    result = client.get("/api/boxes?query=TEST-001")
     assert result.status_code == 200
     assert result.json()["total"] == 1
 
     box_id = result.json()["items"][0]["id"]
     assert client.patch(
         f"/api/boxes/{box_id}",
-        headers=headers,
         json={"customer_shipping_fee": 100},
     ).status_code == 200
-    assert client.get("/api/profitability", headers=headers).status_code == 200
+    assert client.get("/api/profitability").status_code == 200
+    assert client.post("/api/auth/logout").status_code == 200
+    assert client.get("/api/dashboard").status_code == 401
 
 
 def test_api_restores_a_gzipped_sqlite_backup_once(monkeypatch, tmp_path):
@@ -58,16 +63,15 @@ def test_api_restores_a_gzipped_sqlite_backup_once(monkeypatch, tmp_path):
 
     from api.index import app
 
-    client = TestClient(app)
+    client = TestClient(app, base_url="https://testserver")
+    assert client.post("/api/auth/login", json={"password": "test-password"}).status_code == 200
     response = client.post(
         "/api/admin/migrate-sqlite",
-        headers={"Authorization": "Bearer test-password"},
         files={"file": ("finance_customs.db.gz", gzip.compress(source.read_bytes()), "application/gzip")},
     )
     assert response.status_code == 200, response.text
     assert response.json()["migrated"]["boxes"] == 1
     assert client.post(
         "/api/admin/migrate-sqlite",
-        headers={"Authorization": "Bearer test-password"},
         files={"file": ("finance_customs.db.gz", gzip.compress(source.read_bytes()), "application/gzip")},
     ).status_code == 409

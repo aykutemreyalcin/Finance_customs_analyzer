@@ -23,11 +23,13 @@ PostgreSQL provider. The application refuses to serve financial data if
 1. Import this GitHub repository in Vercel; Vercel detects Next.js.
 2. Create a Vercel Postgres database and connect it to the project, or configure
    `DATABASE_URL` for a managed PostgreSQL database.
-3. Add a long random `NEXA_PASSWORD` to Production, Preview, and Development
-   environment variables. Do not expose it as a `NEXT_PUBLIC_*` value.
+3. Add long random `NEXA_PASSWORD` and `NEXA_SESSION_SECRET` values to Production,
+   Preview, and Development environment variables. Do not expose either as a
+   `NEXT_PUBLIC_*` value.
 4. Deploy. Open `/api/health` to confirm database connectivity, then open `/` and
-   enter the password into the unlock screen. The password is stored only in browser
-   session storage.
+   enter the password into the unlock screen. It is exchanged once for a signed,
+   Secure, HttpOnly, same-site session cookie; the password is not stored in the browser
+   or sent with subsequent API requests.
 5. If historical SQLite data needs to move and you have the connection string, take a backup, inspect source counts,
    then run `DATABASE_URL=... python scripts/data_migration/sqlite_to_postgres.py data/finance_customs.db` from a trusted local environment. Alternatively, gzip the database and upload its `.db.gz` file through the password-protected **Restore existing NeXa data** panel. The panel refuses to run when the target database already contains records.
 
