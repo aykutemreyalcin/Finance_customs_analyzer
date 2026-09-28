@@ -259,7 +259,7 @@ def _init_postgres_db(connection):
             customer_total_invoice DOUBLE PRECISION, fedex_service_type TEXT,
             fedex_duty_invoice_no TEXT, fedex_duty_amount DOUBLE PRECISION,
             fedex_shipping_invoice_no TEXT, fedex_shipping_amount DOUBLE PRECISION,
-            fedex_total_cost DOUBLE PRECISION, profit_loss DOUBLE PRECISION)""",
+            fedex_total_cost TEXT, profit_loss TEXT)""",
         """CREATE TABLE IF NOT EXISTS legacy_fedex_invoice_raw (
             id BIGSERIAL PRIMARY KEY, col1 TEXT, col2 TEXT, col3 TEXT, col4 TEXT, col5 TEXT,
             col6 TEXT, col7 TEXT, col8 TEXT, col9 TEXT, col10 TEXT, col11 TEXT, col12 TEXT,
@@ -286,4 +286,18 @@ def _init_postgres_db(connection):
     )
     for statement in statements:
         connection.execute(statement)
+    # SQLite historically stores the display sentinel "Bekliyor" in these two
+    # fields while the invoice is pending. They must remain text in Postgres too;
+    # pandas converts their numeric values back for calculations. Avoid an ALTER
+    # on every function request once the schema has been corrected.
+    for column in ("fedex_total_cost", "profit_loss"):
+        data_type = connection.execute(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_name = 'boxes' AND column_name = ?",
+            (column,),
+        ).fetchone()[0]
+        if data_type != "text":
+            connection.execute(
+                f"ALTER TABLE boxes ALTER COLUMN {column} TYPE TEXT USING {column}::TEXT"
+            )
     connection.commit()
