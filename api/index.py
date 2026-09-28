@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from core.analytics import (
+    compute_above_average_boxes,
     compute_benchmarks,
     compute_customer_invoice_reconciliation,
     compute_customer_profitability,
@@ -31,6 +32,12 @@ from core.analytics import (
     enrich_boxes_for_display,
 )
 from core.box_import import add_single_box, import_boxes, read_box_import_file
+from core.customer_invoice_import import (
+    import_customer_invoices,
+    import_mosaic_handling_invoices,
+    read_customer_invoice_file,
+    read_mosaic_handling_file,
+)
 from core.database import get_connection, init_db, update_box_fields
 from core.ingest import ingest_pdf_bundle
 from core.refunds import add_refund, delete_refund, set_refund_status
@@ -92,6 +99,13 @@ def records(frame: pd.DataFrame) -> list[dict[str, Any]]:
         return []
     cleaned = frame.replace([np.inf, -np.inf], np.nan).where(pd.notnull(frame), None)
     return [{key: json_value(value) for key, value in row.items()} for row in cleaned.to_dict(orient="records")]
+
+
+def page_records(frame: pd.DataFrame, page: int, page_size: int) -> dict[str, Any]:
+    """Keep the Vercel UI responsive even with the historical 35k-line import."""
+    start = (page - 1) * page_size
+    return {"items": records(frame.iloc[start:start + page_size]), "total": len(frame),
+            "page": page, "page_size": page_size}
 
 
 def load_financial_frames():
@@ -306,15 +320,77 @@ def benchmarks():
     return {"items": records(compute_benchmarks(enrich_boxes_for_display(boxes)))}
 
 
+@app.get("/api/above-average", dependencies=[Depends(require_password)])
+def above_average(page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=200)):
+    boxes, _, _ = load_financial_frames()
+    return page_records(compute_above_average_boxes(enrich_boxes_for_display(boxes)), page, page_size)
+
+
 @app.get("/api/data-issues", dependencies=[Depends(require_password)])
 def data_issues():
     boxes, _, _ = load_financial_frames()
     return {"items": records(compute_data_issues(enrich_boxes_for_display(boxes)))}
 
 
+@app.get("/api/reconciliation", dependencies=[Depends(require_password)])
+def reconciliation():
+    boxes, charges, profit = load_financial_frames()
+    fedex = compute_fedex_reconciliation(profit, charges)
+    customer = compute_customer_invoice_reconciliation(profit)
+    pending = profit[(profit["profit_calculation_status"] == "Included") &
+                     (profit["fedex_status"] != "Actual")]
+    missing = profit[profit["profit_calculation_status"] != "Included"]
+    return {
+        "fedex": json_value({key: value for key, value in fedex.items() if not key.endswith("_detail")}),
+        "customer": json_value(customer),
+        "pending": records(pending), "missing_customer_invoices": records(missing),
+        "unallocated": records(fedex["unallocated_detail"]),
+        "unmatched_second_invoices": records(fedex["unmatched_second_invoice_detail"]),
+    }
+
+
 @app.get("/api/invoices", dependencies=[Depends(require_password)])
 def invoices():
     return {"items": records(read_frame("SELECT * FROM invoices ORDER BY invoice_date DESC, invoice_number"))}
+
+
+@app.get("/api/customer-invoices", dependencies=[Depends(require_password)])
+def customer_invoices(query: str = Query("", max_length=100), page: int = Query(1, ge=1),
+                      page_size: int = Query(100, ge=1, le=200)):
+    frame = read_frame("SELECT * FROM customer_invoices ORDER BY invoice_date DESC, id DESC")
+    if query:
+        mask = frame.fillna("").astype(str).apply(lambda column: column.str.contains(query, case=False, regex=False))
+        frame = frame[mask.any(axis=1)]
+    return page_records(frame, page, page_size)
+
+
+@app.get("/api/charges", dependencies=[Depends(require_password)])
+def charges(query: str = Query("", max_length=100), page: int = Query(1, ge=1),
+            page_size: int = Query(100, ge=1, le=200)):
+    frame = read_frame("SELECT * FROM shipment_charges ORDER BY id DESC")
+    if query:
+        mask = frame.fillna("").astype(str).apply(lambda column: column.str.contains(query, case=False, regex=False))
+        frame = frame[mask.any(axis=1)]
+    return page_records(frame, page, page_size)
+
+
+@app.get("/api/disputes", dependencies=[Depends(require_password)])
+def disputes():
+    return {"items": records(read_frame("SELECT * FROM disputed_items ORDER BY added_at DESC")),
+            "reviews": records(read_frame("SELECT * FROM invoice_review ORDER BY reviewed_at DESC"))}
+
+
+@app.get("/api/reports", dependencies=[Depends(require_password)])
+def reports():
+    _, _, profit = load_financial_frames()
+    included = profit[profit["profit_calculation_status"] == "Included"].copy()
+    ship_date = pd.to_datetime(included["ship_date"], errors="coerce")
+    included["month"] = ship_date.dt.strftime("%b %Y").fillna("Unknown")
+    monthly = included.groupby("month", dropna=False).agg(boxes=("id", "size"), revenue=("revenue", "sum"),
+        fedex_cost=("actual_fedex_cost", "sum"), profit=("actual_profit", "sum")).reset_index()
+    country = included.groupby("country", dropna=False).agg(boxes=("id", "size"), revenue=("revenue", "sum"),
+        fedex_cost=("actual_fedex_cost", "sum"), profit=("actual_profit", "sum")).reset_index()
+    return {"monthly": records(monthly), "countries": records(country)}
 
 
 @app.get("/api/refunds", dependencies=[Depends(require_password)])
@@ -366,6 +442,15 @@ async def import_box_file(file: UploadFile = File(...)):
     uploaded.name = file.filename
     frame = read_box_import_file(uploaded)
     return import_boxes(frame)
+
+
+@app.post("/api/import/customer-invoices", dependencies=[Depends(require_password)])
+async def import_customer_invoice_file(file: UploadFile = File(...), mosaic: bool = Query(False)):
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(400, "Upload a CSV customer invoice file.")
+    uploaded = BytesIO(await file.read())
+    frame = read_mosaic_handling_file(uploaded) if mosaic else read_customer_invoice_file(uploaded)
+    return import_mosaic_handling_invoices(frame) if mosaic else import_customer_invoices(frame)
 
 
 @app.post("/api/import/fedex", dependencies=[Depends(require_password)])

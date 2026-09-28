@@ -1,82 +1,39 @@
 "use client";
 
 import { useEffect, useState } from "react";
+const cash = new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}), count = new Intl.NumberFormat("en-US");
+const pages = [["dashboard","Dashboard"],["reconciliation","Reconciliation"],["browse","Invoice Matching"],["boxes","Boxes"],["benchmarks","Benchmarks"],["above-average","Above-Average Invoices"],["data-quality","Data Quality"],["customers","Customer Invoices"],["all-charges","All Shipment Charges"],["disputes","Disputes"],["refunds","Refunds"],["reports","Reports"],["settings","Settings"]];
+function call(path,key,options={}) { return fetch(`/api${path}`,{...options,headers:{Authorization:`Bearer ${key}`,...(options.headers||{})}}).then(async r=>{if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||"Request failed");return r.json()}) }
+function value(v,k="") { if(v===null||v===undefined||v==="")return "—"; if(typeof v==="number")return /amount|cost|profit|revenue|fee|total|value|rate/i.test(k)?cash.format(v):count.format(v); return String(v) }
+function Metric({label,value,note}) { return <article className="metric"><span>{label}</span><strong>{value}</strong>{note&&<small>{note}</small>}</article> }
+function Table({rows=[],limit=100}) { const keys=rows.length?Object.keys(rows[0]).filter(k=>!k.startsWith("_")&&k!=="id"):[]; return rows.length?<div className="table-wrap"><table><thead><tr>{keys.map(k=><th key={k}>{k.replaceAll("_"," ")}</th>)}</tr></thead><tbody>{rows.slice(0,limit).map((r,i)=><tr key={r.id||`${i}-${r.tracking_id||""}`}>{keys.map(k=><td key={k}>{value(r[k],k)}</td>)}</tr>)}</tbody></table>{rows.length>limit&&<p className="table-note">Showing the first {limit} rows.</p>}</div>:<p className="empty">No records found.</p> }
+function Panel({title,eyebrow="OPERATIONS",actions,children}) { return <section className="panel"><div className="section-heading"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2></div>{actions}</div>{children}</section> }
+function Import({apiKey,endpoint,accept,mosaic,onDone}) { const [file,setFile]=useState(null),[msg,setMsg]=useState(""); async function submit(e){e.preventDefault();if(!file)return;setMsg("Importing…");try{const body=new FormData();body.append("file",file);const result=await call(`${endpoint}${mosaic?"?mosaic=true":""}`,apiKey,{method:"POST",body});setMsg(`Done — ${Object.entries(result).map(([k,v])=>`${k}: ${v}`).join(", ")}`);onDone?.()}catch(err){setMsg(err.message)}} return <form className="inline-form" onSubmit={submit}><input type="file" accept={accept} required onChange={e=>setFile(e.target.files?.[0])}/><button>Import</button>{msg&&<small>{msg}</small>}</form> }
 
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-const number = new Intl.NumberFormat("en-US");
-
-function api(path, key, options = {}) {
-  return fetch(`/api${path}`, {
-    ...options,
-    headers: { Authorization: `Bearer ${key}`, ...(options.headers || {}) },
-  }).then(async (response) => {
-    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || "Request failed");
-    return response.json();
-  });
-}
-
-function Metric({ label, value }) {
-  return <article className="metric"><span>{label}</span><strong>{value}</strong></article>;
-}
-
-export default function Home() {
-  const [key, setKey] = useState("");
-  const [storedKey, setStoredKey] = useState("");
-  const [dashboard, setDashboard] = useState(null);
-  const [boxes, setBoxes] = useState([]);
-  const [profitability, setProfitability] = useState([]);
-  const [query, setQuery] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [backup, setBackup] = useState(null);
-  const [migrationMessage, setMigrationMessage] = useState("");
-
-  const load = async (apiKey, search = "") => {
-    setLoading(true); setError("");
-    try {
-      const [summary, boxResult, profitResult] = await Promise.all([
-        api("/dashboard", apiKey),
-        api(`/boxes?page_size=25&query=${encodeURIComponent(search)}`, apiKey),
-        api("/profitability", apiKey),
-      ]);
-      setDashboard(summary); setBoxes(boxResult.items); setProfitability(profitResult.items);
-    } catch (err) { setError(err.message); }
-    finally { setLoading(false); }
-  };
-
-  useEffect(() => {
-    const existing = sessionStorage.getItem("nexa-password");
-    if (existing) { setStoredKey(existing); load(existing); }
-  }, []);
-
-  const unlock = (event) => {
-    event.preventDefault();
-    sessionStorage.setItem("nexa-password", key);
-    setStoredKey(key); load(key);
-  };
-
-  const restoreBackup = async (event) => {
-    event.preventDefault();
-    if (!backup) return;
-    setLoading(true); setError(""); setMigrationMessage("");
-    try {
-      const form = new FormData(); form.append("file", backup);
-      const result = await api("/admin/migrate-sqlite", storedKey, { method: "POST", body: form });
-      setMigrationMessage(`Restore complete: ${Object.values(result.migrated).reduce((sum, value) => sum + value, 0).toLocaleString()} rows copied.`);
-      await load(storedKey);
-    } catch (err) { setError(err.message); }
-    finally { setLoading(false); }
-  };
-
-  if (!storedKey) return <main className="gate"><section className="gate-card"><p className="eyebrow">LOGIWIX LLC / ENRETAG LLC</p><h1>NeXa</h1><p>Enter the workspace password. It is retained only for this browser tab and is never bundled into the site.</p><form onSubmit={unlock}><label>Password<input autoFocus type="password" value={key} onChange={(e) => setKey(e.target.value)} required /></label><button>Open workspace</button></form>{error && <p className="error">{error}</p>}</section></main>;
-
-  return <main className="shell">
-    <header><div><p className="eyebrow">FINANCE & CUSTOMS ANALYZER</p><h1>NeXa</h1></div><button className="quiet" onClick={() => { sessionStorage.removeItem("nexa-password"); setStoredKey(""); }}>Lock</button></header>
-    {error && <p className="error">{error}</p>}
-    {loading && <p className="loading">Refreshing…</p>}
-    {dashboard && <section className="metrics"><Metric label="Boxes" value={number.format(dashboard.box_count)} /><Metric label="Actual revenue" value={money.format(dashboard.revenue)} /><Metric label="Actual profit" value={money.format(dashboard.profit)} /><Metric label="FedEx pending" value={number.format(dashboard.fedex.pending_count)} /></section>}
-    {dashboard?.box_count === 0 && <section className="panel restore"><div><p className="eyebrow">ONE-TIME SETUP</p><h2>Restore existing NeXa data</h2><p>Upload the compressed backup created from <code>data/finance_customs.db</code>. This action runs only against an empty database.</p></div><form onSubmit={restoreBackup}><input aria-label="SQLite backup" type="file" accept=".gz" onChange={(e) => setBackup(e.target.files?.[0] || null)} required /><button disabled={loading}>Restore backup</button></form>{migrationMessage && <p className="success">{migrationMessage}</p>}</section>}
-    <section className="panel"><div className="section-heading"><div><p className="eyebrow">OPERATIONS</p><h2>Boxes</h2></div><input aria-label="Search boxes" placeholder="Search tracking, customer, country…" value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && load(storedKey, query)} /></div><div className="table-wrap"><table><thead><tr><th>Tracking ID</th><th>Customer</th><th>Country</th><th>Ship date</th><th>Revenue</th><th>FedEx cost</th><th>Profit</th><th>Status</th></tr></thead><tbody>{boxes.map((box) => <tr key={box.id}><td>{box.tracking_id || "—"}</td><td>{box.customer_code || "—"}</td><td>{box.country || "—"}</td><td>{box.ship_date || "—"}</td><td>{money.format(box.revenue || 0)}</td><td>{money.format(box.actual_fedex_cost || 0)}</td><td>{money.format(box.actual_profit || 0)}</td><td><span className={box.fedex_status === "Actual" ? "badge good" : "badge"}>{box.fedex_status}</span></td></tr>)}</tbody></table></div></section>
-    <section className="panel"><div className="section-heading"><div><p className="eyebrow">REPORTING</p><h2>Customer profitability</h2></div></div><div className="table-wrap"><table><thead><tr><th>Customer</th><th>Boxes</th><th>Revenue</th><th>FedEx cost</th><th>Profit</th><th>Margin</th></tr></thead><tbody>{profitability.map((row) => <tr key={row.customer_code}><td>{row.customer_code}</td><td>{row.boxes}</td><td>{money.format(row.revenue || 0)}</td><td>{money.format(row.fedex_cost || 0)}</td><td>{money.format(row.profit || 0)}</td><td>{row.margin_percent == null ? "—" : `${(row.margin_percent * 100).toFixed(1)}%`}</td></tr>)}</tbody></table></div></section>
-  </main>;
+export default function Home(){
+ const [key,setKey]=useState(""),[auth,setAuth]=useState(""),[page,setPage]=useState("dashboard"),[result,setResult]=useState([]),[query,setQuery]=useState(""),[error,setError]=useState(""),[busy,setBusy]=useState(false),[backup,setBackup]=useState(null),[notice,setNotice]=useState("");
+ const paths={dashboard:["/dashboard","/profitability","/reports"],reconciliation:["/reconciliation"],browse:["/invoices"],boxes:["/boxes?page_size=100"],benchmarks:["/benchmarks"],"above-average":["/above-average?page_size=100"],"data-quality":["/data-issues"],customers:["/customer-invoices?page_size=100"],"all-charges":["/charges?page_size=100"],disputes:["/disputes"],refunds:["/refunds"],reports:["/reports"],settings:["/dashboard"]};
+ async function load(password=auth,next=page,search=query){setBusy(true);setError("");try{const ps=(paths[next]||[]).map(p=>call(`${p}${(next==="boxes"||next==="customers"||next==="all-charges")&&search?`${p.includes("?")?"&":"?"}query=${encodeURIComponent(search)}`:""}`,password));setResult(await Promise.all(ps))}catch(e){setError(e.message)}finally{setBusy(false)}}
+ useEffect(()=>{const saved=sessionStorage.getItem("nexa-password");if(saved){setAuth(saved);load(saved,"dashboard","")}},[]);
+ const nav=id=>{setPage(id);setQuery("");load(auth,id,"")}; const search=<input placeholder="Search current table…" value={query} onChange={e=>setQuery(e.target.value)} onKeyDown={e=>e.key==="Enter"&&load()}/>;
+ async function restore(e){e.preventDefault();if(!backup)return;setBusy(true);try{const body=new FormData();body.append("file",backup);const r=await call("/admin/migrate-sqlite",auth,{method:"POST",body});setNotice(`Restore complete: ${Object.values(r.migrated).reduce((a,b)=>a+b,0).toLocaleString()} rows copied.`);load(auth,"dashboard","")}catch(err){setError(err.message)}finally{setBusy(false)}}
+ async function refund(e){e.preventDefault();const values=Object.fromEntries(new FormData(e.currentTarget));try{await call("/refunds",auth,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...values,refund_amount:Number(values.refund_amount)})});e.currentTarget.reset();load(auth,"refunds")}catch(err){setError(err.message)}}
+ if(!auth)return <main className="gate"><section className="gate-card"><p className="eyebrow">LOGIWIX LLC / ENRETAG LLC</p><h1>NeXa</h1><p>Finance &amp; Customs Analyzer</p><form onSubmit={e=>{e.preventDefault();sessionStorage.setItem("nexa-password",key);setAuth(key);load(key,"dashboard","")}}><label>Workspace password<input autoFocus type="password" required value={key} onChange={e=>setKey(e.target.value)}/></label><button>Open workspace</button></form>{error&&<p className="error">{error}</p>}</section></main>;
+ const [one={},two={},three={}]=result;
+ const content={
+  dashboard:<><section className="metrics"><Metric label="Boxes" value={count.format(one.box_count||0)}/><Metric label="Actual revenue" value={cash.format(one.revenue||0)}/><Metric label="Actual profit" value={cash.format(one.profit||0)}/><Metric label="FedEx overdue" value={count.format(one.fedex?.overdue_count||0)}/></section>{one.box_count===0&&<Panel title="Restore existing NeXa data" eyebrow="ONE-TIME SETUP"><form className="inline-form" onSubmit={restore}><input type="file" accept=".gz" required onChange={e=>setBackup(e.target.files?.[0])}/><button>Restore backup</button>{notice&&<small>{notice}</small>}</form></Panel>}<Panel title="Financial Summary"><section className="metrics compact"><Metric label="FedEx total" value={cash.format(one.fedex?.total_fedex_invoice||0)}/><Metric label="Unallocated charges" value={cash.format(one.fedex?.unallocated||0)}/><Metric label="Customer invoices missing" value={count.format(one.customer?.missing_boxes||0)}/></section></Panel><Panel title="Customer Profitability" eyebrow="REPORTING"><Table rows={two.items}/></Panel><Panel title="Monthly report" eyebrow="REPORTING"><Table rows={three.monthly}/></Panel></>,
+  reconciliation:<><section className="metrics"><Metric label="FedEx total" value={cash.format(one.fedex?.total_fedex_invoice||0)}/><Metric label="Included cost" value={cash.format(one.fedex?.included||0)}/><Metric label="Unallocated" value={cash.format(one.fedex?.unallocated||0)}/><Metric label="Pending boxes" value={count.format(one.fedex?.pending_count||0)}/></section><Panel title="FedEx pending / overdue"><Table rows={one.pending}/></Panel><Panel title="Customer invoices missing"><Table rows={one.missing_customer_invoices}/></Panel><Panel title="Unallocated FedEx invoice lines"><Table rows={one.unallocated}/></Panel></>,
+  boxes:<><Panel title="Add customer boxes" actions={search}><Import apiKey={auth} endpoint="/import/boxes" accept=".csv,.xlsx,.xls" onDone={()=>load(auth,"boxes")}/><p className="hint">Upload the existing box CSV/Excel template. Duplicate tracking IDs are safely skipped.</p></Panel><Panel title={`Boxes (${count.format(one.total||0)})`} actions={search}><Table rows={one.items}/></Panel></>,
+  benchmarks:<Panel title="Country & shipment benchmarks" eyebrow="ANALYTICS"><p className="hint">Average actual FedEx costs by country and shipment type.</p><Table rows={one.items}/></Panel>,
+  "above-average":<Panel title={`Above-Average Invoices (${count.format(one.total||0)})`} eyebrow="ANALYTICS"><p className="hint">Invoices above the configured country and shipment-type benchmark.</p><Table rows={one.items}/></Panel>,
+  "data-quality":<Panel title="Data Quality" eyebrow="REVIEW"><p className="hint">Records requiring review: missing details, unexpected duty, high cost, or unknown shipment type.</p><Table rows={one.items}/></Panel>,
+  customers:<><Panel title="Import customer invoices" actions={search}><Import apiKey={auth} endpoint="/import/customer-invoices" accept=".csv" onDone={()=>load(auth,"customers")}/><p className="hint">QuickBooks customer-invoice CSV. Existing lines stay intact and duplicate uploads are skipped.</p></Panel><Panel title="Import MOSAIC handling invoices"><Import apiKey={auth} endpoint="/import/customer-invoices" accept=".csv" mosaic onDone={()=>load(auth,"customers")}/></Panel><Panel title={`Customer invoice lines (${count.format(one.total||0)})`}><Table rows={one.items}/></Panel></>,
+  browse:<Panel title="Invoice Matching" eyebrow="FEDEX"><p className="hint">FedEx invoice headers imported from PDFs. Inspect matching and exceptions in Boxes and Reconciliation.</p><Table rows={one.items}/></Panel>,
+  "all-charges":<Panel title={`All Shipment Charges (${count.format(one.total||0)})`} eyebrow="FEDEX" actions={search}><Table rows={one.items}/></Panel>,
+  disputes:<><Panel title="Open & cancelled disputes" eyebrow="CASE MANAGEMENT"><Table rows={one.items}/></Panel><Panel title="Invoice review status"><Table rows={one.reviews}/></Panel></>,
+  refunds:<><Panel title="Add Refund" eyebrow="REFUNDS"><form className="refund-form" onSubmit={refund}><input name="tracking_id" placeholder="Tracking ID"/><input name="box_no" placeholder="Box no."/><input name="customer_code" placeholder="Customer"/><select name="refund_type"><option>Shipping Refund</option><option>Label Refund</option><option>Packaging Refund</option><option>Polybag Refund</option><option>Overcharge Refund</option><option>Duplicate Charge Refund</option><option>Other</option></select><input name="refund_amount" type="number" min="0.01" step="0.01" placeholder="Amount" required/><input name="reason" placeholder="Reason"/><button>Add refund</button></form></Panel><Panel title="Refund register"><Table rows={one.items}/></Panel></>,
+  reports:<><Panel title="Monthly management report" eyebrow="REPORTING"><Table rows={one.monthly}/></Panel><Panel title="Summary by country" eyebrow="REPORTING"><Table rows={one.countries}/></Panel></>,
+  settings:<Panel title="Settings" eyebrow="WORKSPACE"><p className="hint">The workspace is protected by <code>NEXA_PASSWORD</code>. Vercel uses <code>DATABASE_URL</code>; production records are not reset here.</p><button className="quiet" onClick={()=>{sessionStorage.removeItem("nexa-password");setAuth("")}}>Lock workspace</button></Panel>
+ }[page];
+ return <main className="app-shell"><aside><div className="brand"><b>NeXa</b><span>Finance &amp; Customs Analyzer</span></div><nav>{pages.map(([id,label])=><button key={id} className={id===page?"active":""} onClick={()=>nav(id)}>{label}</button>)}</nav><button className="lock" onClick={()=>{sessionStorage.removeItem("nexa-password");setAuth("")}}>Lock</button></aside><section className="workspace"><header><div><p className="eyebrow">FINANCE &amp; CUSTOMS ANALYZER</p><h1>{pages.find(x=>x[0]===page)?.[1]}</h1></div>{busy&&<span className="loading">Refreshing…</span>}</header>{error&&<p className="error">{error}</p>}{content}</section></main>
 }
